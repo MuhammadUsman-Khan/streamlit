@@ -27,6 +27,8 @@ from collections import OrderedDict
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Final, Literal
 
+import click
+
 from streamlit import config_util, development, env_util, file_util, util
 from streamlit.config_option import ConfigOption
 from streamlit.errors import StreamlitAPIException, StreamlitInvalidThemeSectionError
@@ -2785,20 +2787,61 @@ def _set_option(key: str, value: Any, where_defined: str) -> None:
         _config_options[key].set_value(value, where_defined)
 
 
-def _update_config_with_sensitive_env_var(
+# Maps ConfigOption types to the click parameter types used by the CLI, so
+# environment variables are converted identically in every entry point.
+_CLICK_TYPE_BY_OPTION_TYPE: Final = {
+    str: click.STRING,
+    int: click.INT,
+    float: click.FLOAT,
+    bool: click.BOOL,
+}
+
+
+def _convert_env_var_value(option: ConfigOption, env_var_value: str) -> Any:
+    """Convert an environment variable string to the option's type.
+
+    Uses the same click parameter types as the CLI, so `streamlit run`
+    and programmatic entry points (such as `App.run()`) interpret
+    environment variables identically.
+
+    Parameters
+    ----------
+    option : ConfigOption
+        The config option the value is for.
+
+    env_var_value : str
+        The raw environment variable value.
+
+    Returns
+    -------
+    Any
+        The converted value, wrapped in a tuple for `multiple` options
+        to match how click exposes them.
+
+    """
+    value = _CLICK_TYPE_BY_OPTION_TYPE[option.type].convert(env_var_value, None, None)
+    return (value,) if option.multiple else value
+
+
+def _update_config_with_env_vars(
     config_options: dict[str, ConfigOption],
 ) -> None:
-    """Update the config system by parsing the environment variable.
+    """Update the config system by parsing environment variables.
 
     This should only be called from get_config_options.
     """
     for opt_name, opt_val in config_options.items():
-        if not opt_val.sensitive:
-            continue
         env_var_value = os.environ.get(opt_val.env_var)
         if env_var_value is None:
             continue
-        _set_option(opt_name, env_var_value, _DEFINED_BY_ENV_VAR)
+        if opt_val.sensitive:
+            _set_option(opt_name, env_var_value, _DEFINED_BY_ENV_VAR)
+        else:
+            _set_option(
+                opt_name,
+                _convert_env_var_value(opt_val, env_var_value),
+                _DEFINED_BY_ENV_VAR,
+            )
 
 
 def _is_valid_theme_section(section_path: str) -> bool:
@@ -3057,7 +3100,7 @@ def get_config_options(
 
             _update_config_with_toml(file_contents, filename)
 
-        _update_config_with_sensitive_env_var(_config_options)
+        _update_config_with_env_vars(_config_options)
 
         for opt_name, opt_val in options_from_flags.items():
             _set_option(opt_name, opt_val, _DEFINED_BY_FLAG)
