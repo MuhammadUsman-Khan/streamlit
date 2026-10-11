@@ -651,7 +651,7 @@ class ConfigTest(unittest.TestCase):
         assert config.get_where_defined("_test.tomlTest") == DUMMY_DEFINITION
 
     def test_parsing_sensitive_options(self):
-        """Test config._update_config_with_sensitive_env_var()."""
+        """Test config._update_config_with_env_vars() for sensitive options."""
         # Some useful variables.
         DUMMY_VAL_1, DUMMY_VAL_2 = "Adam", "Malysz"
 
@@ -675,6 +675,51 @@ class ConfigTest(unittest.TestCase):
                 config.get_where_defined("_test.sensitiveTest")
                 == config._DEFINED_BY_ENV_VAR
             )
+
+    def test_parsing_non_sensitive_options_from_env_vars(self):
+        """Test that non-sensitive options are read from environment variables.
+
+        Regression test for https://github.com/streamlit/streamlit/issues/17329:
+        entry points that bypass the CLI (such as `App.run()`) must honor
+        `STREAMLIT_*` environment variables for non-sensitive options, with
+        the same type conversion the CLI applies.
+        """
+        config._create_option(
+            "_test.envIntOption",
+            description="An int option set via environment variable.",
+            default_val=1,
+            type_=int,
+        )
+        config._create_option(
+            "_test.envBoolOption",
+            description="A bool option set via environment variable.",
+            default_val=True,
+            type_=bool,
+        )
+        config._create_option(
+            "_test.envMultipleOption",
+            description="A multiple option set via environment variable.",
+            default_val=[],
+            multiple=True,
+        )
+
+        with patch.dict(
+            os.environ,
+            {
+                "STREAMLIT__TEST_ENV_INT_OPTION": "42",
+                # "false" must convert to False, not stay a truthy string.
+                "STREAMLIT__TEST_ENV_BOOL_OPTION": "false",
+                "STREAMLIT__TEST_ENV_MULTIPLE_OPTION": "/tmp/some-dir",
+            },
+        ):
+            config.get_config_options(force_reparse=True)
+            assert config.get_option("_test.envIntOption") == 42
+            assert (
+                config.get_where_defined("_test.envIntOption")
+                == config._DEFINED_BY_ENV_VAR
+            )
+            assert config.get_option("_test.envBoolOption") is False
+            assert config.get_option("_test.envMultipleOption") == ("/tmp/some-dir",)
 
     def test_delete_option(self):
         # Create a dummy default option.
